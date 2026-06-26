@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+# Adjust connected input device sensitivity settings from a floating fzf TUI.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_self="$script_dir/$(basename -- "${BASH_SOURCE[0]}")"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/i3"
+state_file="$state_dir/input-settings.tsv"
+
+# Colon-delimited: short_key:property_name:display_label
+KNOWN_PROPERTIES=(
+  "accel:libinput Accel Speed:Pointer speed"
+  "scroll:libinput Scrolling Pixel Distance:Scroll distance"
+  "profile:libinput Accel Profile Enabled:Accel profile"
+)
+
+get_property_value() {
+  local id=$1 property=$2
+  xinput list-props "$id" 2>/dev/null |
+    awk -v property="$property" '
+      $0 ~ "^[[:space:]]*" property " \\([0-9]+\\):" {
+        sub(/^[^:]+:[[:space:]]*/, "")
+        print
+        exit
+      }
+    '
+}
+
+# fzf preview: list current settings for a device id
+if [[ ${1:-} == --preview-device ]]; then
+  device_id=$2
+  found=0
+  for entry in "${KNOWN_PROPERTIES[@]}"; do
+    IFS=: read -r key prop label <<< "$entry"
+    val=$(get_property_value "$device_id" "$prop")
+    if [[ -n $val ]]; then
+      display_val="$val"
+      if [[ $key == profile ]]; then
+        case "$val" in
+          "1, 0, 0") display_val="adaptive" ;;
+          "0, 1, 0") display_val="flat" ;;
+        esac
+      fi
+      printf '%s: %s\n' "$label" "$display_val"
+      found=1
+    fi
+  done
+  (( found )) || printf 'No adjustable settings found.\n'
+  exit 0
+fi
+
+# fzf preview: show help text for a property short key
+if [[ ${1:-} == --preview-setting ]]; then
+  case "${2:-}" in
+    accel)
+      printf 'Range: -1.0 to 1.0\n'
+      printf 'Negative is slower, 0 is neutral, positive is faster.\n'
+      ;;
+    scroll)
+      printf 'Range: positive integer\n'
+      printf 'Higher values make scrolling slower per finger movement.\n'
+      ;;
+    profile)
+      printf 'adaptive  Standard acceleration curve (default)\n'
+      printf 'flat      No acceleration, 1:1 pointer movement\n'
+      ;;
+  esac
+  exit 0
+fi
+
+# --- Main TUI ---
+
+if [[ -z ${LOCAL_TUI_LAUNCHED:-} && ! -t 1 && -x "$script_dir/launch-tui" ]]; then
+  LOCAL_TUI_TITLE=Input exec "$script_dir/launch-tui" "$0" "$@"
+fi
+
+need_command() {
+  local cmd=$1 pkg=$2
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    printf '%s is required for Input settings.\nInstall %s, then open Settings > Input again.\n\nPress Enter to close.' "$cmd" "$pkg"
+    read -r _ || true
+    exit 1
+  fi
+}
+
+need_command xinput "xorg-xinput"
+need_command fzf "fzf"
+
+trim_device_name() {
+  sed -E 's/^[^[:alnum:]_\/-]+//; s/[[:space:]]+id=.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+list_devices() {
+  xinput list --short 2>/dev/null | while IFS= read -r line; do
+    [[ $line =~ id=([0-9]+) ]] || continue
+    local id=${BASH_REMATCH[1]}
+    local name
+    name=$(printf '%s\n' "$line" | trim_device_name)
+    [[ -n $name ]] || continue
+    printf '%s\t%s\n' "$id" "$name"
+  done
+}
+
+list_configurable_devices() {
+  while IFS=$'\t' read -r id name; do
+    for entry in "${KNOWN_PROPERTIES[@]}"; do
+      IFS=: read -r _key prop _label <<< "$entry"
+      if [[ -n $(get_property_value "$id" "$prop") ]]; then
+        printf '%s\t%s\n' "$id" "$name"
+        break
+      fi
+    done
+  done < <(list_devices)
+}
+
+# Outputs tab-delimited rows: display\tshort_key\tproperty\tlabel\traw_value
+get_device_settings() {
+  local id=$1
+  for entry in "${KNOWN_PROPERTIES[@]}"; do
+    IFS=: read -r key prop label <<< "$entry"
+    local val display_val
+    val=$(get_property_value "$id" "$prop" || true)
+    if [[ -n $val ]]; then
+      display_val="$val"
+      if [[ $key == profile ]]; then
+        case "$val" in
+          "1, 0, 0") display_val="adaptive" ;;
+          "0, 1, 0") display_val="flat" ;;
+        esac
+      fi
+      printf '%s: %s\t%s\t%s\t%s\t%s\n' "$label" "$display_val" "$key" "$prop" "$label" "$val"
+    fi
+  done
+}
+
+validate_value() {
+  local property=$1 value=$2
+  case "$property" in
+    "libinput Accel Speed")
+      [[ $value =~ ^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] || return 1
+      awk -v v="$value" 'BEGIN { exit (v >= -1 && v <= 1) ? 0 : 1 }'
+      ;;
+    "libinput Scrolling Pixel Distance")
+      [[ $value =~ ^[0-9]+$ ]] || return 1
+      (( value > 0 ))
+      ;;
+    "libinput Accel Profile Enabled")
+      [[ $value == "1, 0, 0" || $value == "0, 1, 0" ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+save_setting() {
+  local name=$1 property=$2 value=$3 tmp_file
+  mkdir -p "$state_dir"
+  tmp_file=$(mktemp "$state_dir/input-settings.XXXXXX")
+  if [[ -f $state_file ]]; then
+    awk -F '\t' -v OFS='\t' -v name="$name" -v property="$property" -v value="$value" '
+      $1 == name && $2 == property { print name, property, value; replaced = 1; next }
+      NF >= 3 { print $1, $2, $3 }
+      END { if (!replaced) print name, property, value }
+    ' "$state_file" > "$tmp_file"
+  else
+    printf '%s\t%s\t%s\n' "$name" "$property" "$value" > "$tmp_file"
+  fi
+  mv "$tmp_file" "$state_file"
+}
+
+# Outer loop: device selection
+while true; do
+  devices=$(list_configurable_devices)
+
+  if [[ -z ${devices:-} ]]; then
+    clear
+    printf 'No configurable input devices found.\n'
+    printf 'This menu supports libinput Accel Speed, Scrolling Pixel Distance, and Accel Profile.\n\nPress Enter to close.'
+    read -r _ || true
+    exit 0
+  fi
+
+  selected_device=$(
+    printf '%s\n' "$devices" |
+      fzf \
+        --delimiter=$'\t' \
+        --with-nth=2 \
+        --prompt='Input> ' \
+        --header='Select a device  ·  Enter: configure  ·  Esc: close' \
+        --preview="$script_self --preview-device {1}" \
+        --preview-window='right:40:wrap' \
+        --color='pointer:green,marker:green'
+  ) || exit 0
+
+  IFS=$'\t' read -r device_id device_name <<< "$selected_device"
+
+  # Inner loop: settings for selected device
+  while true; do
+    settings=$(get_device_settings "$device_id")
+
+    if [[ -z ${settings:-} ]]; then
+      clear
+      printf 'No adjustable settings for %s.\n\nPress Enter to go back.' "$device_name"
+      read -r _ || true
+      break
+    fi
+
+    selected_setting=$(
+      printf '%s\n' "$settings" |
+        fzf \
+          --delimiter=$'\t' \
+          --with-nth=1 \
+          --prompt="$device_name> " \
+          --header='Select a setting  ·  Enter: edit  ·  j/k: navigate  ·  Esc: back' \
+          --preview="$script_self --preview-setting {2}" \
+          --preview-window='down:4:wrap' \
+          --bind='j:down,k:up' \
+          --color='pointer:green,marker:green'
+    ) || break
+
+    IFS=$'\t' read -r _display setting_key property label current_value <<< "$selected_setting"
+
+    # Translate raw value to human-readable for display
+    display_current="$current_value"
+    if [[ $setting_key == profile ]]; then
+      case "$current_value" in
+        "1, 0, 0") display_current="adaptive" ;;
+        "0, 1, 0") display_current="flat" ;;
+      esac
+    fi
+
+    clear
+    printf '%s\n%s: %s\n\n' "$device_name" "$label" "$display_current"
+
+    xinput_value=""
+    display_new=""
+
+    if [[ $setting_key == profile ]]; then
+      case "$current_value" in
+        "1, 0, 0") profile_options=$'adaptive\nflat' ;;
+        *)         profile_options=$'flat\nadaptive' ;;
+      esac
+
+      choice=$(printf '%s\n' "$profile_options" |
+        fzf \
+          --prompt="$device_name — $label> " \
+          --header='Select a profile  ·  Enter: apply  ·  j/k: navigate  ·  Esc: cancel' \
+          --bind='j:down,k:up' \
+          --color='pointer:green,marker:green' \
+          --no-preview
+      ) || continue
+
+      case "$choice" in
+        adaptive) xinput_value="1, 0, 0" ;;
+        flat)     xinput_value="0, 1, 0" ;;
+        *) continue ;;
+      esac
+      display_new="$choice"
+    else
+      case "$property" in
+        "libinput Accel Speed")
+          printf 'Enter a pointer speed from -1.0 to 1.0.\n'
+          printf 'Negative is slower, 0 is neutral, positive is faster.\n'
+          ;;
+        "libinput Scrolling Pixel Distance")
+          printf 'Enter a positive integer scroll distance.\n'
+          printf 'Higher values usually make scrolling slower per finger movement.\n'
+          ;;
+      esac
+
+      printf '\nNew value (empty to cancel): '
+      read -r new_value || break
+
+      [[ -n $new_value ]] || continue
+
+      if ! validate_value "$property" "$new_value"; then
+        printf '\nInvalid value: %s\nPress Enter to continue.' "$new_value"
+        read -r _ || true
+        continue
+      fi
+
+      xinput_value="$new_value"
+      display_new="$new_value"
+    fi
+
+    read -ra xinput_args <<< "${xinput_value//,/ }"
+    if ! xinput set-prop "$device_id" "$property" "${xinput_args[@]}"; then
+      printf '\nFailed to apply %s to %s.\nThe device may have disconnected. Press Enter to continue.' "$property" "$device_name"
+      read -r _ || true
+      continue
+    fi
+
+    save_setting "$device_name" "$property" "$xinput_value"
+
+    if command -v notify-send >/dev/null 2>&1; then
+      notify-send -a input-settings "Input" "$label set to $display_new for $device_name" 2>/dev/null || true
+    fi
+  done
+done

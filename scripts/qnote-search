@@ -1,0 +1,36 @@
+#!/bin/sh
+# qnote-search — live full-text search across the qnote Markdown knowledge
+# base with ripgrep + fzf. Enter opens the matched file in vim at the line.
+# Meant to run inside a floating terminal (see launch-tui).
+set -eu
+
+# Resolve the knowledge dir from the same .env qnote's CLI uses, so create
+# and search can never point at different places. Fall back to the default.
+ENV_FILE="$HOME/repos/qnote/.env"
+KB=""
+[ -f "$ENV_FILE" ] && KB=$(. "$ENV_FILE" 2>/dev/null; printf '%s' "${QNOTE_KNOWLEDGE_DIR:-}")
+KB=${KB:-$HOME/ai-share/knowledge}
+case "$KB" in "~"*) KB="$HOME${KB#\~}" ;; esac
+
+if [ ! -d "$KB" ]; then
+    printf 'qnote-search: knowledge dir not found: %s\n' "$KB" >&2
+    sleep 2
+    exit 1
+fi
+
+cd "$KB"
+
+# ripgrep does the filtering (fzf is --disabled and just reloads on keypress).
+RG="rg --line-number --no-heading --color=always --smart-case --glob '*.md'"
+
+selection=$(
+    fzf --ansi --disabled --layout=reverse --prompt 'qnote> ' \
+        --delimiter : \
+        --bind "start:reload:$RG -- {q} || true" \
+        --bind "change:reload:$RG -- {q} || true"
+) || exit 0
+
+[ -n "$selection" ] || exit 0
+file=$(printf '%s\n' "$selection" | cut -d: -f1)
+line=$(printf '%s\n' "$selection" | cut -d: -f2)
+exec vim "+${line}" "$file"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Open package maintenance actions from Walker.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+spawn_floating() {
+  local title=$1
+  shift
+
+  LOCAL_TUI_TITLE=$title exec "$script_dir/launch-tui" "$@"
+}
+
+chosen=$(printf '  Install\n  Remove\n  Upgrade\n  Clean\n' | "$script_dir/menu-select" "Packages")
+[[ -n $chosen ]] || exit 0
+
+case "$chosen" in
+  *"Install"*) spawn_floating "Install Package" "$script_dir/pkg-install" ;;
+  *"Remove"*) spawn_floating "Remove Package" "$script_dir/pkg-remove" ;;
+  *"Upgrade"*) spawn_floating "Upgrade Packages" "$script_dir/pkg-upgrade" ;;
+  *"Clean"*) spawn_floating "Clean Packages" "$script_dir/pkg-clean" ;;
+esac

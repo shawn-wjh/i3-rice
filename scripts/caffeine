@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# caffeine — keep the system awake until Ctrl+C (or the terminal closes),
+# like macOS `caffeinate`.
+#
+# How it works in this setup: every $INTERVAL seconds it does a 1px, net-zero
+# mouse jiggle. That resets the X input-idle timer, which is what the screen
+# blanker (xset s), DPMS, xss-lock, AND the xprintidle-based idle-suspend
+# daemon all key off of — so a single mechanism defeats all of them. It also
+# holds a systemd idle inhibitor for good measure (visible in
+# `systemd-inhibit --list`). Nothing to restore on exit.
+#
+# Usage:  caffeine [interval_seconds]   (default 50)
+set -euo pipefail
+
+INTERVAL="${1:-50}"
+
+inhibit_pid=""
+cleanup() {
+    [[ -n "$inhibit_pid" ]] && kill "$inhibit_pid" 2>/dev/null || true
+    printf '\ncaffeine: stopped — system can idle again.\n'
+}
+trap 'exit 0' INT TERM HUP
+trap cleanup EXIT
+
+# Hold a systemd idle inhibitor for our entire lifetime (second layer of
+# defense alongside the jiggle); killed by cleanup on exit.
+systemd-inhibit --what=idle --who=caffeine --why="user requested stay-awake" \
+    sleep infinity &
+inhibit_pid=$!
+
+printf 'caffeine: keeping system awake (poke every %ss). Ctrl+C to stop.\n' "$INTERVAL"
+
+while true; do
+    # Net-zero pointer move: generates input events without injecting
+    # keystrokes into the focused window.
+    xdotool mousemove_relative --sync -- 1 0  >/dev/null 2>&1 || true
+    xdotool mousemove_relative --sync -- -1 0 >/dev/null 2>&1 || true
+    sleep "$INTERVAL"
+done

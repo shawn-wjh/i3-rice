@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Open viars-tui in the local floating terminal wrapper.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Optional dependency (https://github.com/shawn-wjh/viars-tui). Override with $VIARS_TUI_BIN.
+viars_tui_bin="${VIARS_TUI_BIN:-$(command -v viars-tui || echo "$HOME/.local/bin/viars-tui")}"
+
+if ! command -v "$viars_tui_bin" >/dev/null 2>&1 && [ ! -x "$viars_tui_bin" ]; then
+    notify-send -a viars-tui "viars-tui not installed" \
+        "Install it: https://github.com/shawn-wjh/viars-tui" 2>/dev/null || true
+    exit 0
+fi
+
+LOCAL_TUI_TITLE="Keyboard" exec "$script_dir/launch-tui" "$viars_tui_bin"

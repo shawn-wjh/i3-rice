@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# Search and install repo and AUR packages from one fzf list.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z ${LOCAL_TUI_LAUNCHED:-} && ! -t 1 && -x "$script_dir/launch-tui" ]]; then
+  exec "$script_dir/launch-tui" "$0" "$@"
+fi
+
+aur_helper=${AUR_HELPER:-}
+if [[ -z $aur_helper ]]; then
+  for helper in paru yay; do
+    if command -v "$helper" >/dev/null 2>&1; then
+      aur_helper=$helper
+      break
+    fi
+  done
+fi
+
+if [[ -n $aur_helper ]] && ! command -v "$aur_helper" >/dev/null 2>&1; then
+  echo "AUR helper not found: $aur_helper" >&2
+  aur_helper=
+fi
+
+build_package_list() {
+  pacman -Slq | awk 'NF { print "repo\t" $0 }'
+
+  if [[ -n $aur_helper ]]; then
+    "$aur_helper" -Slqa 2>/dev/null | awk 'NF { print "aur\t" $0 }' || true
+  fi
+}
+
+preview_cmd='
+source=$1
+pkg=$2
+
+case "$source" in
+  repo) pacman -Sii "$pkg" ;;
+  aur)
+    if [[ -n ${AUR_HELPER:-} ]]; then
+      "$AUR_HELPER" -Siia "$pkg"
+    else
+      echo "No AUR helper found"
+    fi
+    ;;
+esac
+'
+
+pkgbuild_cmd='
+source=$1
+pkg=$2
+
+case "$source" in
+  repo) pacman -Sii "$pkg" ;;
+  aur)
+    if [[ -n ${AUR_HELPER:-} ]]; then
+      "$AUR_HELPER" -Gpa "$pkg" 2>/dev/null | tail -n +5
+    else
+      echo "No AUR helper found"
+    fi
+    ;;
+esac
+'
+
+fzf_args=(
+  --multi
+  --delimiter=$'\t'
+  --with-nth=1,2
+  --nth=2,1
+  --prompt='Packages> '
+  --header='Source column: repo or aur | tab: multi-select | alt-p: preview | alt-b/B: PKGBUILD/info'
+  --preview "bash -c '$preview_cmd' -- {1} {2}"
+  --preview-label='alt-p: toggle description, alt-b/B: toggle PKGBUILD, alt-j/k: scroll'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --bind "alt-b:change-preview:bash -c '$pkgbuild_cmd' -- {1} {2}"
+  --bind "alt-B:change-preview:bash -c '$preview_cmd' -- {1} {2}"
+  --color 'pointer:green,marker:green'
+)
+
+selection=$(AUR_HELPER=$aur_helper build_package_list | AUR_HELPER=$aur_helper fzf "${fzf_args[@]}") || exit 0
+
+repo_pkgs=()
+aur_pkgs=()
+
+while IFS=$'\t' read -r source pkg; do
+  [[ -n ${source:-} && -n ${pkg:-} ]] || continue
+
+  case "$source" in
+    repo) repo_pkgs+=("$pkg") ;;
+    aur) aur_pkgs+=("$pkg") ;;
+  esac
+done <<< "$selection"
+
+if (( ${#repo_pkgs[@]} == 0 && ${#aur_pkgs[@]} == 0 )); then
+  exit 0
+fi
+
+if [[ -r "$script_dir/sudo-keepalive" ]]; then
+  source "$script_dir/sudo-keepalive"
+else
+  sudo -v
+fi
+
+if (( ${#repo_pkgs[@]} > 0 )); then
+  sudo pacman -S --noconfirm "${repo_pkgs[@]}"
+fi
+
+if (( ${#aur_pkgs[@]} > 0 )); then
+  if [[ -z $aur_helper ]]; then
+    echo "Cannot install AUR selections because no AUR helper was found." >&2
+    exit 1
+  fi
+
+  "$aur_helper" -S --aur --noconfirm "${aur_pkgs[@]}"
+fi
+
+if (( ${#aur_pkgs[@]} > 0 )) && command -v updatedb >/dev/null 2>&1; then
+  sudo updatedb || true
+fi
+
+if command -v notify-send >/dev/null 2>&1; then
+  notify-send -u low "Package install complete"
+fi
+
+if [[ -x "$script_dir/show-done" ]]; then
+  "$script_dir/show-done"
+fi

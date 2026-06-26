@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Apply one of the static display layouts used by the i3 settings menu.
+set -euo pipefail
+
+quiet=false
+dry_run=false
+profile=
+
+while (($#)); do
+  case "$1" in
+    --quiet)
+      quiet=true
+      ;;
+    --dry-run)
+      dry_run=true
+      ;;
+    --saved-or-default)
+      profile=__saved_or_default__
+      ;;
+    laptop | monitor-only)
+      profile=$1
+      ;;
+    *)
+      echo "Usage: display-apply [--quiet] [--dry-run] <laptop|monitor-only|--saved-or-default>" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+state_file="${XDG_CACHE_HOME:-$HOME/.cache}/i3/display-profile/selected"
+
+if [[ $profile == __saved_or_default__ ]]; then
+  profile=$(sed -n '1p' "$state_file" 2>/dev/null || true)
+fi
+
+mapfile -t connected < <(xrandr --query | awk '$2 == "connected" { print $1 }')
+mapfile -t primary < <(xrandr --query | awk '$2 == "connected" && $3 == "primary" { print $1 }')
+mapfile -t all_outputs < <(xrandr --query | awk '$2 == "connected" || $2 == "disconnected" { print $1 }')
+
+laptop=
+declare -a externals=()
+
+for output in "${connected[@]}"; do
+  if [[ $output =~ ^(eDP|LVDS) ]]; then
+    [[ -z $laptop ]] && laptop=$output
+  else
+    externals+=("$output")
+  fi
+done
+
+if [[ -z ${profile:-} ]]; then
+  if ((${#externals[@]})); then
+    profile=monitor-only
+  else
+    profile=laptop
+  fi
+fi
+
+notify() {
+  $quiet && return 0
+  notify-send -a display-profile "Display" "$1" 2>/dev/null || true
+}
+
+apply_keyboard() {
+  $dry_run && return 0
+  "$HOME/.config/i3/scripts/keyboard-apply" >/dev/null 2>&1 || true
+}
+
+run_xrandr() {
+  if $dry_run; then
+    printf 'xrandr'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+
+  xrandr "$@"
+}
+
+case "$profile" in
+  laptop)
+    if [[ -z $laptop ]]; then
+      notify "No laptop panel found"
+      exit 1
+    fi
+
+    args=(--output "$laptop" --auto --primary)
+    for output in "${all_outputs[@]}"; do
+      [[ $output == "$laptop" ]] && continue
+      args+=(--output "$output" --off)
+    done
+
+    run_xrandr "${args[@]}"
+    apply_keyboard
+    notify "Loaded Laptop"
+    ;;
+
+  monitor-only)
+    if ((${#externals[@]} == 0)); then
+      if [[ -z $laptop ]]; then
+        notify "No external monitor or laptop panel found"
+        exit 1
+      fi
+
+      args=(--output "$laptop" --auto --primary)
+      for output in "${all_outputs[@]}"; do
+        [[ $output == "$laptop" ]] && continue
+        args+=(--output "$output" --off)
+      done
+
+      run_xrandr "${args[@]}"
+      apply_keyboard
+      notify "No external monitor connected; using Laptop"
+      exit 0
+    fi
+
+    monitor=${primary[0]:-${externals[0]}}
+    if [[ $monitor =~ ^(eDP|LVDS) ]]; then
+      monitor=${externals[0]}
+    fi
+
+    args=(--output "$monitor" --auto --primary --set audio on)
+    for output in "${all_outputs[@]}"; do
+      [[ $output == "$monitor" ]] && continue
+      args+=(--output "$output" --off)
+    done
+
+    run_xrandr "${args[@]}"
+    apply_keyboard
+    notify "Loaded Monitor Only"
+    ;;
+
+  *)
+    echo "Unknown display profile: $profile" >&2
+    exit 2
+    ;;
+esac

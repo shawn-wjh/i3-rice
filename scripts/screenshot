@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+capture_dir="${XDG_SCREENSHOTS_DIR:-$HOME/Pictures/Screenshots}"
+menu="${I3_CONFIG_DIR:-$HOME/.config/i3}/scripts/menu-select"
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    notify-send -u critical "Screenshot" "Missing dependency: $1" 2>/dev/null || true
+    exit 1
+  fi
+}
+
+choose_action() {
+  if [[ -x "$menu" ]]; then
+    printf 'copy\nsave\ncopy & save\n' | "$menu" Screenshot
+  else
+    printf 'copy\nsave\ncopy & save\n' | rofi -dmenu -i -p Screenshot
+  fi
+}
+
+copy_png() {
+  local file=$1
+
+  if command -v clipcatctl >/dev/null 2>&1; then
+    clipcatctl load --mime image/png --file "$file"
+    return
+  fi
+
+  if command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard -target image/png -in "$file"
+    return
+  fi
+
+  if [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wl-copy >/dev/null 2>&1; then
+    wl-copy --type image/png <"$file"
+    return
+  fi
+
+  notify-send -u critical "Screenshot" "Missing clipboard helper: clipcatctl or xclip" 2>/dev/null || true
+  exit 1
+}
+
+need maim
+
+action=$(choose_action || true)
+[[ -n ${action:-} ]] || exit 0
+
+tmp=$(mktemp --suffix=.png)
+trap 'rm -f "$tmp"' EXIT
+
+maim -s "$tmp"
+
+case "$action" in
+  copy)
+    copy_png "$tmp"
+    notify-send "Screenshot" "Copied selection" 2>/dev/null || true
+    ;;
+  save)
+    mkdir -p "$capture_dir"
+    file="$capture_dir/screenshot-$(date +%Y%m%d-%H%M%S).png"
+    mv "$tmp" "$file"
+    trap - EXIT
+    notify-send "Screenshot" "Saved to $file" 2>/dev/null || true
+    ;;
+  "copy & save")
+    mkdir -p "$capture_dir"
+    file="$capture_dir/screenshot-$(date +%Y%m%d-%H%M%S).png"
+    cp "$tmp" "$file"
+    copy_png "$tmp"
+    notify-send "Screenshot" "Copied and saved to $file" 2>/dev/null || true
+    ;;
+esac

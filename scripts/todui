@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Open todui (https://github.com/shawn-wjh/todui) in the floating terminal wrapper.
+# Optional dependency: if the binary isn't installed this no-ops with a hint.
+# Override the binary path with $TODUI_BIN.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+todui_bin="${TODUI_BIN:-$HOME/.cargo/bin/todui}"
+
+if ! command -v "$todui_bin" >/dev/null 2>&1 && [ ! -x "$todui_bin" ]; then
+    notify-send -a todui "todui not installed" \
+        "Install it: cargo install --git https://github.com/shawn-wjh/todui" 2>/dev/null || true
+    exit 0
+fi
+
+LOCAL_TUI_TITLE="Todo" exec "$script_dir/launch-tui" "$todui_bin"

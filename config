@@ -1,0 +1,15 @@
+# i3 config file (v4)
+# See https://i3wm.org/docs/userguide.html for reference
+
+set $mod Mod4
+set $refresh_i3status true
+
+floating_modifier $mod
+tiling_drag modifier titlebar
+
+include ~/.config/i3/configurations/appearance.conf
+include ~/.config/i3/configurations/autostart.conf
+include ~/.config/i3/configurations/keybindings.conf
+include ~/.config/i3/configurations/workspaces.conf
+include ~/.config/i3/configurations/modes.conf
+include ~/.config/i3/configurations/media.conf

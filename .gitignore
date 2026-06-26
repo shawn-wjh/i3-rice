@@ -1,0 +1,12 @@
+themes/current/
+.cache
+
+# Local editor / agent state
+.claude/settings.local.json
+
+# Python bytecode
+scripts/__pycache__/
+*.pyc
+
+# Keyd backup left by migration
+scripts/keyboard-apply.pre-keyd.bak

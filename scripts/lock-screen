@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+configure_xsecurelock() {
+    export XSECURELOCK_BACKGROUND_COLOR="#000000"
+    export XSECURELOCK_AUTH_BACKGROUND_COLOR="#000000"
+    export XSECURELOCK_AUTH_FOREGROUND_COLOR="#d3d3d3"
+    export XSECURELOCK_AUTH_WARNING_COLOR="#FF4444"
+    export XSECURELOCK_AUTH_CURSOR_BLINK=0
+    export XSECURELOCK_AUTH_TIMEOUT=30
+    export XSECURELOCK_FONT="Noto Sans Mono"
+    export XSECURELOCK_PASSWORD_PROMPT="asterisks"
+    export XSECURELOCK_SHOW_USERNAME=0
+    export XSECURELOCK_SHOW_HOSTNAME=0
+    export XSECURELOCK_SHOW_DATETIME=0
+    export XSECURELOCK_SHOW_KEYBOARD_LAYOUT=0
+}
+
+show_auth_prompt() {
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if pkill -x -USR2 xsecurelock >/dev/null 2>&1; then
+            return 0
+        fi
+
+        sleep 0.1
+    done
+}
+
+run_locker() {
+    xsecurelock &
+    locker_pid="$!"
+
+    sleep 0.3
+
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if kill -USR2 "$locker_pid" >/dev/null 2>&1; then
+            break
+        fi
+
+        sleep 0.1
+    done
+
+    wait "$locker_pid"
+}
+
+lock_async() {
+    if ! pgrep -x xsecurelock >/dev/null; then
+        setsid "$0" --locker >/dev/null 2>&1 &
+        return 0
+    fi
+
+    show_auth_prompt
+}
+
+configure_xsecurelock
+
+if [[ "${1:-}" == "--locker" ]]; then
+    run_locker
+    exit 0
+fi
+
+if [[ "${1:-}" == "--async" ]]; then
+    lock_async
+    exit 0
+fi
+
+if pgrep -x xsecurelock >/dev/null; then
+    show_auth_prompt
+else
+    run_locker
+fi

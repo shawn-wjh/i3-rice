@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+I3_CONFIG_DIR="${I3_CONFIG_DIR:-$HOME/.config/i3}"
+THEMES_DIR="$I3_CONFIG_DIR/themes"
+
+find "$THEMES_DIR" -mindepth 1 -maxdepth 1 -type d \
+  ! -name current \
+  ! -name templates \
+  -exec test -f '{}/colors.toml' ';' \
+  -printf '%f\n' | sort

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Keyboard remapping now lives in keyd (keyd/default.conf -> /etc/keyd/default.conf),
+# which operates at the evdev level below X and is not reset by layout/display
+# changes. So the old setxkbmap options (altwin:swap_alt_win, ctrl:nocaps) are
+# gone and this script is intentionally a no-op, kept so existing callers
+# (autostart.conf, display-apply) don't break.
+#
+# Previous behaviour preserved in scripts/keyboard-apply.pre-keyd.bak
+# To (re)install the keyd config: scripts/keyd-install
+exit 0

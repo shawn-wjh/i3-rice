@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+
+I3_CONFIG_DIR="${I3_CONFIG_DIR:-$HOME/.config/i3}"
+CURRENT_NAME_FILE="$I3_CONFIG_DIR/themes/current/theme.name"
+CURRENT_THEME="$(sed -n '1p' "$CURRENT_NAME_FILE" 2>/dev/null || true)"
+
+declare -a LABELS THEMES
+while IFS= read -r theme; do
+  [[ -n "$theme" ]] || continue
+  if [[ "$theme" == "$CURRENT_THEME" ]]; then
+    LABELS+=("* $theme")
+  else
+    LABELS+=("  $theme")
+  fi
+  THEMES+=("$theme")
+done < <("$I3_CONFIG_DIR/scripts/theme-list")
+
+((${#LABELS[@]} > 0)) || exit 0
+
+CHOSEN="$(printf '%s\n' "${LABELS[@]}" | rofi -dmenu -i -p "Theme")"
+[[ -n "$CHOSEN" ]] || exit 0
+
+for i in "${!LABELS[@]}"; do
+  if [[ "${LABELS[$i]}" == "$CHOSEN" ]]; then
+    exec "$I3_CONFIG_DIR/scripts/theme-set" "${THEMES[$i]}"
+  fi
+done

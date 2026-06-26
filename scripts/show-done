@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Wait before closing a completed terminal task.
+set -euo pipefail
+
+echo
+read -r -n 1 -s -p "Done. Press any key to close..."
+echo

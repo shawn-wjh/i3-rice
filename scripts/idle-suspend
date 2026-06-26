@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/i3-idle-suspend.lock"
+readonly IDLE_LIMIT_MS=$((30 * 60 * 1000))
+readonly POLL_SECONDS=30
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+while true; do
+    idle_ms="$(xprintidle)"
+
+    if (( idle_ms >= IDLE_LIMIT_MS )); then
+        ~/.config/i3/scripts/lock-screen --async
+        sleep 1
+        systemctl suspend
+
+        while (( "$(xprintidle)" >= IDLE_LIMIT_MS )); do
+            sleep "$POLL_SECONDS"
+        done
+    fi
+
+    sleep "$POLL_SECONDS"
+done

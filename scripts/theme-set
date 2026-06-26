@@ -1,0 +1,296 @@
+#!/bin/bash
+set -euo pipefail
+
+I3_CONFIG_DIR="${I3_CONFIG_DIR:-$HOME/.config/i3}"
+THEMES_DIR="$I3_CONFIG_DIR/themes"
+TEMPLATES_DIR="$THEMES_DIR/templates"
+CURRENT_DIR="$THEMES_DIR/current"
+CURRENT_THEME_DIR="$CURRENT_DIR/theme"
+NEXT_THEME_DIR=""
+BACKGROUND_LINK="$CURRENT_DIR/background"
+
+usage() {
+  echo "Usage: theme-set [--render-only] <theme-name>" >&2
+}
+
+RENDER_ONLY=0
+if [[ "${1:-}" == "--render-only" ]]; then
+  RENDER_ONLY=1
+  shift
+fi
+
+if [[ -z "${1:-}" ]]; then
+  usage
+  exit 1
+fi
+
+THEME_NAME_INPUT="$(printf '%s' "$1" | sed -E 's/<[^>]+>//g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+THEME_SOURCE_DIR="$THEMES_DIR/$THEME_NAME_INPUT"
+
+if [[ ! -f "$THEME_SOURCE_DIR/colors.toml" ]]; then
+  while IFS= read -r theme_dir; do
+    if [[ "${theme_dir,,}" == "${THEME_NAME_INPUT,,}" ]]; then
+      THEME_SOURCE_DIR="$THEMES_DIR/$theme_dir"
+      break
+    fi
+  done < <("$I3_CONFIG_DIR/scripts/theme-list")
+fi
+
+THEME_NAME="$(basename "$THEME_SOURCE_DIR")"
+
+if [[ ! -f "$THEME_SOURCE_DIR/colors.toml" ]]; then
+  echo "Theme '$THEME_NAME_INPUT' does not exist" >&2
+  exit 1
+fi
+
+hex_to_rgb() {
+  local hex="${1#\#}"
+  printf "%d,%d,%d" "0x${hex:0:2}" "0x${hex:2:2}" "0x${hex:4:2}"
+}
+
+sed_escape() {
+  sed -e 's/[|&\]/\\&/g'
+}
+
+render_templates() {
+  local theme_dir="$1"
+  local colors_file="$theme_dir/colors.toml"
+  local sed_script
+
+  sed_script="$(mktemp)"
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*\"([^\"]*)\" ]]; then
+      local key="${BASH_REMATCH[1]}"
+      local value="${BASH_REMATCH[2]}"
+      local escaped_value stripped_value
+
+      escaped_value="$(printf '%s' "$value" | sed_escape)"
+      stripped_value="$(printf '%s' "${value#\#}" | sed_escape)"
+
+      printf 's|{{ %s }}|%s|g\n' "$key" "$escaped_value" >>"$sed_script"
+      printf 's|{{ %s_strip }}|%s|g\n' "$key" "$stripped_value" >>"$sed_script"
+
+      if [[ "$value" == \#* ]]; then
+        printf 's|{{ %s_rgb }}|%s|g\n' "$key" "$(hex_to_rgb "$value")" >>"$sed_script"
+      fi
+    fi
+  done <"$colors_file"
+
+  # Non-color substitutions so templates stay machine-portable. watch_files and
+  # absolute paths can't shell-expand, so they're rendered in here.
+  printf 's|{{ HOME }}|%s|g\n' "$(printf '%s' "$HOME" | sed_escape)" >>"$sed_script"
+
+  local detected_battery=""
+  for cap in /sys/class/power_supply/*/capacity; do
+    [[ -e "$cap" ]] || continue
+    local bdir; bdir="$(dirname "$cap")"
+    [[ "$(cat "$bdir/type" 2>/dev/null)" == "Battery" ]] && { detected_battery="$(basename "$bdir")"; break; }
+  done
+  printf 's|{{ BATTERY }}|%s|g\n' "${detected_battery:-BAT0}" >>"$sed_script"
+
+  for template in "$TEMPLATES_DIR"/*.tpl; do
+    [[ -f "$template" ]] || continue
+    local output_path="$theme_dir/$(basename "$template" .tpl)"
+    [[ -f "$output_path" ]] && continue
+    sed -f "$sed_script" "$template" >"$output_path"
+  done
+
+  rm -f "$sed_script"
+}
+
+select_first_background() {
+  local theme_dir="$1"
+  local background=""
+
+  background="$(
+    find "$theme_dir/backgrounds" -maxdepth 1 -type f \
+      \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.webp' \) \
+      -print 2>/dev/null | sort | sed -n '1p'
+  )"
+
+  [[ -n "$background" ]] || return 0
+  ln -nsf "$background" "$BACKGROUND_LINK"
+}
+
+install_generated_file() {
+  local source="$1"
+  local target="$2"
+  local target_dir
+
+  target_dir="$(dirname "$target")"
+  mkdir -p "$target_dir"
+
+  if [[ -e "$target" && ! -e "$target.i3-theme-backup" && ! -L "$target" ]]; then
+    cp -a "$target" "$target.i3-theme-backup"
+  fi
+
+  install -m 0644 "$source" "$target"
+}
+
+set_vscode_theme() {
+  local editor_cmd="$1"
+  local settings_path="$2"
+  local vscode_theme="$CURRENT_THEME_DIR/vscode.json"
+
+  command -v "$editor_cmd" >/dev/null 2>&1 || return 0
+  [[ -f "$vscode_theme" ]] || return 0
+
+  local theme_name extension settings_dir tmp extension_lower
+  theme_name="$(jq -r '.name // empty' "$vscode_theme")"
+  extension="$(jq -r '.extension // empty' "$vscode_theme")"
+  [[ -n "$theme_name" ]] || return 0
+
+  if [[ -n "$extension" ]]; then
+    extension_lower="$(printf '%s' "$extension" | tr '[:upper:]' '[:lower:]')"
+
+    if ! find "$HOME/.vscode-oss/extensions" "$HOME/.vscode/extensions" -maxdepth 1 -type d \
+      -iname "$extension_lower-*" -print -quit 2>/dev/null | grep -q .; then
+      timeout 5 "$editor_cmd" --install-extension "$extension" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  settings_dir="$(dirname "$settings_path")"
+  mkdir -p "$settings_dir"
+  [[ -f "$settings_path" ]] || printf '{}\n' >"$settings_path"
+
+  tmp="$(mktemp)"
+  if jq --arg theme "$theme_name" '. + {"workbench.colorTheme": $theme}' "$settings_path" >"$tmp"; then
+    install -m 0644 "$tmp" "$settings_path"
+  fi
+  rm -f "$tmp"
+}
+
+set_btop_theme() {
+  local theme_source="$CURRENT_THEME_DIR/btop.theme"
+  local theme_target="$HOME/.config/btop/themes/i3.theme"
+  local config_path="$HOME/.config/btop/btop.conf"
+  local tmp
+
+  [[ -f "$theme_source" ]] || return 0
+
+  mkdir -p "$(dirname "$theme_target")" "$(dirname "$config_path")"
+  install -m 0644 "$theme_source" "$theme_target"
+
+  [[ -f "$config_path" ]] || printf '# btop configuration\n' >"$config_path"
+
+  tmp="$(mktemp)"
+  if grep -q '^color_theme[[:space:]]*=' "$config_path"; then
+    sed -E 's|^color_theme[[:space:]]*=.*|color_theme = "i3"|' "$config_path" >"$tmp"
+  else
+    cat "$config_path" >"$tmp"
+    printf '\ncolor_theme = "i3"\n' >>"$tmp"
+  fi
+  install -m 0644 "$tmp" "$config_path"
+  rm -f "$tmp"
+}
+
+set_firefox_theme() {
+  local css_source="$CURRENT_THEME_DIR/firefox-userChrome.css"
+  local firefox_dir
+  local profile_path profile_dir user_js tmp
+  local pref='user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);'
+  local -a profiles=()
+
+  [[ -f "$css_source" ]] || return 0
+
+  for firefox_dir in "$HOME/.mozilla/firefox" "$HOME/.config/mozilla/firefox"; do
+    [[ -d "$firefox_dir" ]] || continue
+
+    if [[ -f "$firefox_dir/profiles.ini" ]]; then
+      while IFS= read -r profile_path; do
+        [[ -n "$profile_path" ]] || continue
+        if [[ "$profile_path" = /* ]]; then
+          profiles+=("$profile_path")
+        else
+          profiles+=("$firefox_dir/$profile_path")
+        fi
+      done < <(awk -F= '$1 == "Path" { print $2 }' "$firefox_dir/profiles.ini")
+      continue
+    fi
+
+    while IFS= read -r profile_dir; do
+      profiles+=("$profile_dir")
+    done < <(find "$firefox_dir" -maxdepth 1 -type d \( -name '*.default*' -o -name '*.release*' \) -print 2>/dev/null)
+  done
+
+  for profile_dir in "${profiles[@]}"; do
+    [[ -d "$profile_dir" ]] || continue
+
+    mkdir -p "$profile_dir/chrome"
+    install_generated_file "$css_source" "$profile_dir/chrome/userChrome.css"
+
+    user_js="$profile_dir/user.js"
+    [[ -f "$user_js" ]] || printf '// Firefox profile preferences managed by i3 theme-set.\n' >"$user_js"
+
+    tmp="$(mktemp)"
+    if grep -q 'toolkit\.legacyUserProfileCustomizations\.stylesheets' "$user_js"; then
+      sed -E "s|^user_pref\\(\"toolkit\\.legacyUserProfileCustomizations\\.stylesheets\".*|$pref|" "$user_js" >"$tmp"
+    else
+      cat "$user_js" >"$tmp"
+      printf '\n%s\n' "$pref" >>"$tmp"
+    fi
+    install -m 0644 "$tmp" "$user_js"
+    rm -f "$tmp"
+  done
+}
+
+apply_generated_configs() {
+  install_generated_file "$CURRENT_THEME_DIR/rofi.rasi" "$HOME/.config/rofi/config.rasi"
+  install_generated_file "$CURRENT_THEME_DIR/dunstrc" "$HOME/.config/dunst/dunstrc"
+  install_generated_file "$CURRENT_THEME_DIR/i3status.toml" "$HOME/.config/i3status/config.toml"
+  install_generated_file "$CURRENT_THEME_DIR/alacritty.toml" "$HOME/.config/alacritty/alacritty.toml"
+  set_btop_theme
+  set_firefox_theme
+
+  set_vscode_theme code "$HOME/.config/Code/User/settings.json"
+  set_vscode_theme code-oss "$HOME/.config/Code - OSS/User/settings.json"
+  set_vscode_theme codium "$HOME/.config/VSCodium/User/settings.json"
+  set_vscode_theme cursor "$HOME/.config/Cursor/User/settings.json"
+}
+
+restart_services() {
+  "$I3_CONFIG_DIR/scripts/theme-apply-background" || true
+
+  if [[ -z "${I3SOCK:-}" ]]; then
+    I3SOCK="$(i3 --get-socketpath 2>/dev/null || true)"
+    export I3SOCK
+  fi
+
+  if ! i3-msg reload >/dev/null; then
+    notify-send -a theme -u critical -t 4000 "Theme" "Theme files updated, but i3 reload failed." >/dev/null 2>&1 || true
+    echo "Theme files updated, but i3 reload failed. Run 'i3-msg reload' from your i3 session." >&2
+  fi
+
+  if [[ -f "$HOME/.config/alacritty/alacritty.toml" ]]; then
+    touch "$HOME/.config/alacritty/alacritty.toml"
+  fi
+
+  if pgrep -x dunst >/dev/null 2>&1 && command -v dunstctl >/dev/null 2>&1; then
+    dunstctl reload "$HOME/.config/dunst/dunstrc" >/dev/null 2>&1 || pkill -x dunst >/dev/null 2>&1 || true
+  fi
+
+  if ! pgrep -x dunst >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    pkill -x dunst >/dev/null 2>&1 || true
+    setsid dunst >/dev/null 2>&1 &
+  fi
+
+  pkill -SIGUSR2 btop >/dev/null 2>&1 || true
+}
+
+mkdir -p "$CURRENT_DIR"
+NEXT_THEME_DIR="$(mktemp -d "$CURRENT_DIR/next-theme.XXXXXXXX")"
+cp -R "$THEME_SOURCE_DIR/." "$NEXT_THEME_DIR/"
+
+render_templates "$NEXT_THEME_DIR"
+
+rm -rf "$CURRENT_THEME_DIR"
+mv "$NEXT_THEME_DIR" "$CURRENT_THEME_DIR"
+printf '%s\n' "$THEME_NAME" >"$CURRENT_DIR/theme.name"
+select_first_background "$CURRENT_THEME_DIR"
+
+if ((RENDER_ONLY == 0)); then
+  apply_generated_configs
+  restart_services
+  notify-send -a theme -t 2500 "Theme" "$THEME_NAME" >/dev/null 2>&1 || true
+fi

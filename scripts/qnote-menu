@@ -1,0 +1,30 @@
+#!/bin/sh
+# qnote-menu — mod+n entry point: create a note or search notes with qnote.
+set -eu
+
+here=$(dirname "$0")
+
+# Optional dependency (https://github.com/shawn-wjh/qnote). Override the binary
+# with $QNOTE_BIN. If it isn't installed, hint and bail instead of erroring.
+QNOTE="${QNOTE_BIN:-$(command -v qnote 2>/dev/null || echo "$HOME/.local/bin/qnote")}"
+if ! { command -v "$QNOTE" >/dev/null 2>&1 || [ -x "$QNOTE" ]; }; then
+    command -v notify-send >/dev/null 2>&1 && notify-send -a qnote "qnote not installed" \
+        "Install it: https://github.com/shawn-wjh/qnote"
+    exit 0
+fi
+export QNOTE_BIN="$QNOTE"
+
+choice=$(printf '%s\n' "📝 Create note" "🔍 Search notes" \
+    | rofi -dmenu -i -p "qnote")
+
+case "$choice" in
+    "📝 Create note")
+        exec env LOCAL_TUI_TITLE="qnote" "$here/launch-tui" "$here/qnote-capture"
+        ;;
+    "🔍 Search notes")
+        exec env LOCAL_TUI_TITLE="qnote search" "$here/launch-tui" "$here/qnote-search"
+        ;;
+    *)
+        exit 0
+        ;;
+esac

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Select a static display profile.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+state_dir="${XDG_CACHE_HOME:-$HOME/.cache}/i3/display-profile"
+state_file="$state_dir/selected"
+
+selected=$(sed -n '1p' "$state_file" 2>/dev/null || true)
+
+profiles=(laptop monitor-only)
+labels=("  Laptop" "  Monitor Only")
+
+for i in "${!profiles[@]}"; do
+  profile=${profiles[$i]}
+  marker="  "
+  if [[ $profile == "$selected" ]]; then
+    marker="* "
+  fi
+  labels[$i]="${marker}${labels[$i]:2}"
+done
+
+chosen=$(printf '%s\n' "${labels[@]}" | "$script_dir/menu-select" "Display")
+[[ -n $chosen ]] || exit 0
+
+selected=
+for i in "${!profiles[@]}"; do
+  if [[ ${labels[$i]} == "$chosen" ]]; then
+    selected=${profiles[$i]}
+    break
+  fi
+done
+
+[[ -n $selected ]] || exit 1
+
+mkdir -p -- "$state_dir"
+printf '%s\n' "$selected" >"$state_file"
+
+if ! "$script_dir/display-apply" "$selected"; then
+  rm -f -- "$state_file"
+  notify-send -a display-profile -u critical "Display" "Failed to load ${chosen:2}"
+  exit 1
+fi

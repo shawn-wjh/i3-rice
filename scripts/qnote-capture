@@ -1,0 +1,35 @@
+#!/bin/sh
+# qnote-capture — type a note directly in vim; `:wq` files it to qnote's
+# Inbox via `qnote note`, while `:cq` or an empty draft discards it.
+# Meant to run inside a floating terminal (see launch-tui).
+set -eu
+
+# Resolved/exported by qnote-menu; falls back if run standalone. See qnote-menu.
+QNOTE="${QNOTE_BIN:-$(command -v qnote 2>/dev/null || echo "$HOME/.local/bin/qnote")}"
+
+notify() {
+    command -v notify-send >/dev/null 2>&1 && notify-send "$@"
+}
+
+draft=$(mktemp "${TMPDIR:-/tmp}/qnote-draft-XXXXXX.md")
+trap 'rm -f "$draft"' EXIT
+
+printf '\n' > "$draft"
+
+if vim \
+    -c 'set laststatus=2' \
+    -c 'set statusline=qnote\ \ \|\ \ :wq\ save\ \ \|\ \ :cq\ discard' \
+    -c 'normal! gg' \
+    -c 'startinsert!' \
+    "$draft"
+then
+    note=$(cat "$draft")
+    # Discard blank drafts so `qnote note` is never called with empty text.
+    if [ -n "$(printf '%s' "$note" | tr -d '[:space:]')" ]; then
+        if out=$("$QNOTE" note "$note" 2>&1); then
+            notify "qnote" "$out"
+        else
+            notify -u critical "qnote" "capture failed: $out"
+        fi
+    fi
+fi

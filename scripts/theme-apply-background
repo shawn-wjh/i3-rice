@@ -1,0 +1,45 @@
+#!/bin/bash
+set -euo pipefail
+
+I3_CONFIG_DIR="${I3_CONFIG_DIR:-$HOME/.config/i3}"
+CURRENT_DIR="$I3_CONFIG_DIR/themes/current"
+THEME_DIR="$CURRENT_DIR/theme"
+BACKGROUND_LINK="$CURRENT_DIR/background"
+
+toml_value() {
+  local key="$1"
+  local file="$2"
+
+  awk -F'"' -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      print $2
+      exit
+    }
+  ' "$file"
+}
+
+fallback_color="#000000"
+if [[ -f "$THEME_DIR/colors.toml" ]]; then
+  fallback_color="$(toml_value background "$THEME_DIR/colors.toml")"
+  fallback_color="${fallback_color:-#000000}"
+fi
+
+if [[ -L "$BACKGROUND_LINK" || -f "$BACKGROUND_LINK" ]]; then
+  if command -v feh >/dev/null 2>&1; then
+    feh --bg-fill "$BACKGROUND_LINK"
+    exit 0
+  fi
+
+  if command -v xwallpaper >/dev/null 2>&1; then
+    xwallpaper --zoom "$BACKGROUND_LINK"
+    exit 0
+  fi
+fi
+
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -solid "$fallback_color"
+fi
+
+if [[ -L "$BACKGROUND_LINK" || -f "$BACKGROUND_LINK" ]]; then
+  notify-send -a theme -t 3000 "Theme" "Install feh or xwallpaper to use image wallpapers." >/dev/null 2>&1 || true
+fi

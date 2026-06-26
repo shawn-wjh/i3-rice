@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Remove orphan packages and trim package cache.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -r "$script_dir/sudo-keepalive" ]]; then
+  source "$script_dir/sudo-keepalive"
+else
+  sudo -v
+fi
+
+orphans=$(pacman -Qtdq || true)
+if [[ -n $orphans ]]; then
+  # shellcheck disable=SC2086
+  sudo pacman -Rns --noconfirm $orphans
+fi
+
+if command -v paccache >/dev/null 2>&1; then
+  sudo paccache -rk2
+  sudo paccache -ruk0
+else
+  sudo pacman -Sc --noconfirm
+fi
+
+notify-send -a pkg "Package Clean" "Complete" 2>/dev/null || true
+"$script_dir/show-done"

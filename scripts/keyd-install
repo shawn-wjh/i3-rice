@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Install this repo's keyd config to /etc/keyd and (re)start the service.
+# Needs root -> run with sudo, e.g.:  ! ~/.config/i3/scripts/keyd-install
+set -euo pipefail
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/keyd/default.conf"
+
+if [[ $EUID -ne 0 ]]; then
+  exec sudo "$0" "$@"
+fi
+
+echo "Validating $SRC ..."
+keyd check "$SRC"
+
+echo "Installing -> /etc/keyd/default.conf"
+install -Dm644 "$SRC" /etc/keyd/default.conf
+
+echo "Enabling + (re)starting keyd ..."
+systemctl enable --now keyd
+keyd reload
+
+echo "Done. Active config:"
+systemctl --no-pager --lines=0 status keyd | head -3

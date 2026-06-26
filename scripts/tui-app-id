@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Build the Hyprland class/app id used by local TUI windows.
+set -euo pipefail
+
+if (( $# == 0 )); then
+  echo "Usage: tui-app-id <command>" >&2
+  exit 2
+fi
+
+name=$(basename -- "$1")
+name=${name//[^[:alnum:]_.-]/-}
+
+printf 'local.tui.%s\n' "$name"

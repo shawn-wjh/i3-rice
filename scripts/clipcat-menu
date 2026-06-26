@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Remember the window to paste back into; the menu steals focus.
+target_window=
+if command -v xdotool >/dev/null 2>&1; then
+  target_window="$(xdotool getactivewindow 2>/dev/null || true)"
+fi
+
+# Build the menu from clipboard history, newest first. We pull it from clipcatd
+# over D-Bus and sort by timestamp ourselves: `clipcatctl list` returns clips in
+# an unstable, unordered sequence. Each emitted line is "<hex-id>\t<preview>".
+mapfile -t entries < <(
+  busctl --user --json=short call \
+    org.clipcat.clipcat /org/clipcat/clipcat/manager \
+    org.clipcat.clipcat.Manager List t 200 2>/dev/null \
+  | python3 -c '
+import sys, json
+try:
+    clips = json.load(sys.stdin)["data"][0]
+except Exception:
+    sys.exit(0)
+clips.sort(key=lambda c: c[3], reverse=True)  # c[3] = timestamp, newest first
+for c in clips:
+    preview = c[4].replace("\t", " ").replace("\n", " ")
+    print(f"{c[0]:x}\t{preview}")
+'
+)
+if (( ${#entries[@]} == 0 )); then
+  exit 0
+fi
+
+# Show only the previews; -format i returns the chosen row index so we can map
+# it back to the clip id. We drive rofi directly (instead of `clipcat-menu
+# insert`) so a cancel is detectable: Esc, or a custom non-matching entry,
+# yields empty/negative output and we exit without touching the clipboard.
+index="$(
+  printf '%s\n' "${entries[@]#*$'\t'}" |
+    rofi -dmenu -i -format i -p clip -l 8 \
+      -theme-str 'window { width: 700px; }'
+)" || exit 0
+[[ $index =~ ^[0-9]+$ ]] || exit 0
+
+clipcatctl promote "${entries[$index]%%$'\t'*}" >/dev/null
+
+# A clip was selected: restore focus to the original window and paste it.
+sleep 0.08
+
+if command -v xdotool >/dev/null 2>&1; then
+  if [[ -n $target_window ]]; then
+    xdotool windowactivate --sync "$target_window" 2>/dev/null || true
+    sleep 0.05
+  fi
+  exec xdotool key --clearmodifiers ctrl+v
+fi
+
+if [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wtype >/dev/null 2>&1; then
+  exec wtype -M ctrl -P v -p v -m ctrl
+fi
+
+notify-send -a clipcat -u normal "Clipcat" "Clip copied to clipboard. Install xdotool to paste automatically."

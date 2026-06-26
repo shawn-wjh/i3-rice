@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+
+I3_CONFIG_DIR="${I3_CONFIG_DIR:-$HOME/.config/i3}"
+CURRENT_DIR="$I3_CONFIG_DIR/themes/current"
+THEME_DIR="$CURRENT_DIR/theme"
+BACKGROUND_LINK="$CURRENT_DIR/background"
+
+mapfile -d '' -t BACKGROUNDS < <(
+  find "$THEME_DIR/backgrounds" -maxdepth 1 -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.webp' \) \
+    -print0 2>/dev/null | sort -z
+)
+
+if ((${#BACKGROUNDS[@]} == 0)); then
+  notify-send -a theme -t 2500 "Theme" "No backgrounds found for current theme." >/dev/null 2>&1 || true
+  exit 0
+fi
+
+CURRENT_BACKGROUND=""
+if [[ -L "$BACKGROUND_LINK" ]]; then
+  CURRENT_BACKGROUND="$(readlink "$BACKGROUND_LINK")"
+fi
+
+index=-1
+for i in "${!BACKGROUNDS[@]}"; do
+  if [[ "${BACKGROUNDS[$i]}" == "$CURRENT_BACKGROUND" ]]; then
+    index="$i"
+    break
+  fi
+done
+
+next_index=0
+if ((index >= 0)); then
+  next_index=$(((index + 1) % ${#BACKGROUNDS[@]}))
+fi
+
+mkdir -p "$CURRENT_DIR"
+ln -nsf "${BACKGROUNDS[$next_index]}" "$BACKGROUND_LINK"
+"$I3_CONFIG_DIR/scripts/theme-apply-background"

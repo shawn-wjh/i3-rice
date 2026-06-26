@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATUS_FILE="${I3_SCRATCHPAD_STATUS_FILE:-$HOME/.config/i3/.cache/scratchpad-slots}"
+STATE_DIR="${I3_SCRATCHPAD_STATE_DIR:-$HOME/.config/i3/.cache/scratchpad-slots.d}"
+mkdir -p "$(dirname "$STATUS_FILE")"
+mkdir -p "$STATE_DIR"
+
+usage() {
+    printf 'usage: %s slot 1..13 | menu | status | watch\n' "$0" >&2
+}
+
+tree_json() {
+    i3-msg -t get_tree
+}
+
+slot_file() {
+    printf '%s/F%s\n' "$STATE_DIR" "$1"
+}
+
+slot_is_valid() {
+    [[ "${1:-}" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 13 ))
+}
+
+focused_window_record() {
+    tree_json | jq -r '
+        recurse(.nodes[]?, .floating_nodes[]?)
+        | select(.window != null and .focused == true)
+        | [
+            .id,
+            .window
+          ]
+        | @tsv
+    ' | head -n 1
+}
+
+window_by_slot_value() {
+    local tree="$1"
+    local value="$2"
+
+    printf '%s' "$tree" | jq -r --arg value "$value" '
+        def windows($workspace; $scratch):
+            . as $node
+            | ($scratch or ((.scratchpad_state // "none") != "none")) as $is_scratch
+            | if .window != null then
+                [
+                    .id,
+                    .window,
+                    (if $is_scratch then "scratch" else "normal" end),
+                    $workspace
+                ]
+                | @tsv
+              else
+                (.nodes[]?, .floating_nodes[]? | windows($workspace; $is_scratch))
+              end;
+
+        recurse(.nodes[]?)
+        | select(.type == "workspace") as $workspace
+        | $workspace
+        | (.nodes[]?, .floating_nodes[]? | windows($workspace.name // ""; false))
+        | split("\t")
+        | select(.[0] == $value or .[1] == $value)
+        | @tsv
+    ' | head -n 1
+}
+
+remove_id_from_other_slots() {
+    local target_id="$1"
+    local current_slot="$2"
+    local slot file id
+
+    for slot in {1..13}; do
+        [[ "$slot" == "$current_slot" ]] && continue
+
+        file="$(slot_file "$slot")"
+        [[ -s "$file" ]] || continue
+
+        id="$(<"$file")"
+        [[ "$id" == "$target_id" ]] && rm -f "$file"
+    done
+}
+
+occupied_slots() {
+    local tree slot file value record con_id client_id scratch_state workspace
+
+    tree="$(tree_json)"
+
+    for slot in {1..13}; do
+        file="$(slot_file "$slot")"
+        [[ -s "$file" ]] || continue
+
+        value="$(<"$file")"
+        record="$(window_by_slot_value "$tree" "$value")"
+
+        if [[ -z "$record" ]]; then
+            rm -f "$file"
+            continue
+        fi
+
+        IFS=$'\t' read -r con_id client_id scratch_state workspace <<< "$record"
+        if [[ "$workspace" != "__i3_scratch" ]]; then
+            rm -f "$file"
+            continue
+        fi
+
+        printf '%s\n' "$client_id" > "$file"
+        printf 'F%s\n' "$slot"
+    done
+}
+
+scratchpad_menu_rows() {
+    tree_json | jq -r '
+        def windows($scratch):
+            . as $node
+            | ($scratch or ((.scratchpad_state // "none") != "none")) as $is_scratch
+            | if .window != null then
+                select($is_scratch)
+                | [
+                    .id,
+                    (.window_properties.class // .window_properties.instance // "app"),
+                    (.name // "untitled")
+                  ]
+                | @tsv
+              else
+                (.nodes[]?, .floating_nodes[]? | windows($is_scratch))
+              end;
+
+        recurse(.nodes[]?)
+        | select(.type == "workspace" and .name == "__i3_scratch")
+        | (.nodes[]?, .floating_nodes[]? | windows(false))
+    '
+}
+
+write_status() {
+    local slots
+
+    slots="$(occupied_slots | paste -sd ' ' -)"
+
+    if [[ -n "$slots" ]]; then
+        printf 'SP:%s\n' "$slots" > "$STATUS_FILE"
+    else
+        : > "$STATUS_FILE"
+    fi
+}
+
+slot_command() {
+    local slot="$1"
+    local file existing value con_id client_id state workspace focused
+
+    if ! slot_is_valid "$slot"; then
+        usage
+        return 2
+    fi
+
+    file="$(slot_file "$slot")"
+    existing=""
+
+    if [[ -s "$file" ]]; then
+        value="$(<"$file")"
+        existing="$(window_by_slot_value "$(tree_json)" "$value")"
+    fi
+
+    if [[ -n "$existing" ]]; then
+        IFS=$'\t' read -r con_id client_id state workspace <<< "$existing"
+
+        if [[ "$workspace" == "__i3_scratch" ]]; then
+            i3-msg "[con_id=$con_id] move container to workspace current" >/dev/null
+            i3-msg "[con_id=$con_id] focus" >/dev/null
+            rm -f "$file"
+            write_status
+            return 0
+        else
+            i3-msg "[con_id=$con_id] focus" >/dev/null
+            rm -f "$file"
+            write_status
+            return 0
+        fi
+    elif [[ -e "$file" ]]; then
+        rm -f "$file"
+    fi
+
+    focused="$(focused_window_record)"
+    [[ -n "$focused" ]] || return 1
+    IFS=$'\t' read -r con_id client_id <<< "$focused"
+
+    remove_id_from_other_slots "$client_id" "$slot"
+    printf '%s\n' "$client_id" > "$file"
+    i3-msg "[con_id=$con_id] move scratchpad" >/dev/null
+    write_status
+}
+
+menu_command() {
+    local id class title selected_index
+    local -a ids=()
+    local -a entries=()
+
+    while IFS=$'\t' read -r id class title; do
+        [[ -n "${id:-}" ]] || continue
+        ids+=("$id")
+        entries+=("$class - $title")
+    done < <(scratchpad_menu_rows)
+
+    if ((${#entries[@]} == 0)); then
+        printf 'Scratchpad is empty\n' | rofi -dmenu -p scratchpad >/dev/null || true
+        return 0
+    fi
+
+    selected_index="$(printf '%s\n' "${entries[@]}" | rofi -dmenu -i -p scratchpad -format i)"
+    [[ -n "$selected_index" ]] || return 0
+
+    i3-msg "[con_id=${ids[$selected_index]}] move container to workspace current" >/dev/null
+    i3-msg "[con_id=${ids[$selected_index]}] focus" >/dev/null
+    write_status
+}
+
+watch_command() {
+    while true; do
+        write_status || true
+        i3-msg -t subscribe -m '["window"]' | while read -r _event; do
+            write_status || true
+        done
+        sleep 1
+    done
+}
+
+case "${1:-}" in
+    slot)
+        slot_command "${2:-}"
+        ;;
+    menu)
+        menu_command
+        ;;
+    status)
+        write_status
+        ;;
+    watch)
+        watch_command
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac

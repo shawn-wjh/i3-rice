@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Upgrade system packages in a floating terminal.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if command -v paru >/dev/null 2>&1; then
+  paru -Syu
+elif command -v yay >/dev/null 2>&1; then
+  yay -Syu
+else
+  sudo pacman -Syu
+fi
+
+notify-send -a pkg "System Upgrade" "Complete" 2>/dev/null || true
+"$script_dir/show-done"

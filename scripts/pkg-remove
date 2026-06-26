@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Search and remove installed packages from an fzf TUI.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+fzf_args=(
+  --multi
+  --preview 'pacman -Qi {1}'
+  --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select'
+  --preview-label-pos='bottom'
+  --preview-window 'down:65%:wrap'
+  --bind 'alt-p:toggle-preview'
+  --bind 'alt-d:preview-half-page-down,alt-u:preview-half-page-up'
+  --bind 'alt-k:preview-up,alt-j:preview-down'
+  --color 'pointer:green,marker:green'
+)
+
+pkg_names=$(pacman -Qq | fzf "${fzf_args[@]}") || exit 0
+[[ -n $pkg_names ]] || exit 0
+
+if [[ -r "$script_dir/sudo-keepalive" ]]; then
+  source "$script_dir/sudo-keepalive"
+else
+  sudo -v
+fi
+
+mapfile -t packages <<< "$pkg_names"
+sudo pacman -Rns --noconfirm "${packages[@]}"
+
+notify-send -a pkg "Package Remove" "Complete" 2>/dev/null || true
+"$script_dir/show-done"

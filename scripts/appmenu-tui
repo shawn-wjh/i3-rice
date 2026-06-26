@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Open appmenu-tui in the local floating terminal wrapper.
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+appmenu_bin="${APPMENU_TUI_BIN:-$HOME/.local/bin/appmenu-tui}"
+
+LOCAL_TUI_TITLE="App Menu" exec "$script_dir/launch-tui" "$appmenu_bin"

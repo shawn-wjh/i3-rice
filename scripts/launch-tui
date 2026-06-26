@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Run a command in a terminal with a predictable TUI app id.
+set -euo pipefail
+
+if (( $# == 0 )); then
+  echo "Usage: launch-tui <command> [args...]" >&2
+  exit 2
+fi
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+app_id="$("$script_dir/tui-app-id" "$1")"
+title=${LOCAL_TUI_TITLE:-$(basename -- "$1")}
+floating_class=${LOCAL_TUI_CLASS:-i3-floating-tui}
+floating_title="$floating_class: $title"
+terminal=${LOCAL_TUI_TERMINAL:-${TERMINAL:-$script_dir/alacritty-display-font}}
+launcher=(setsid)
+
+open_centered_floating_terminal() {
+  local cmd=()
+
+  case "$(basename -- "$terminal")" in
+    kitty)
+      cmd=("${launcher[@]}" "$terminal" --class="$floating_class" --title="$floating_title" env LOCAL_TUI_LAUNCHED=1 LOCAL_TUI_APP_ID="$app_id" "$@")
+      ;;
+    foot)
+      cmd=("${launcher[@]}" "$terminal" --app-id="$floating_class" -T "$floating_title" -e env LOCAL_TUI_LAUNCHED=1 LOCAL_TUI_APP_ID="$app_id" "$@")
+      ;;
+    ghostty)
+      cmd=("${launcher[@]}" "$terminal" --class="$floating_class" --title="$floating_title" -e env LOCAL_TUI_LAUNCHED=1 LOCAL_TUI_APP_ID="$app_id" "$@")
+      ;;
+    alacritty | alacritty-display-font)
+      cmd=("${launcher[@]}" "$terminal" --class="$floating_class,$floating_class" --title "$floating_title" -e env LOCAL_TUI_LAUNCHED=1 LOCAL_TUI_APP_ID="$app_id" "$@")
+      ;;
+    *)
+      cmd=("${launcher[@]}" "$terminal" -e env LOCAL_TUI_LAUNCHED=1 LOCAL_TUI_APP_ID="$app_id" "$@")
+      ;;
+  esac
+
+  "${cmd[@]}" &
+
+  if command -v i3-msg >/dev/null 2>&1; then
+    for _ in {1..20}; do
+      i3-msg "[class=\"$floating_class\"] floating enable, resize set 900 600, move position center" >/dev/null 2>&1 || true
+      i3-msg "[instance=\"$floating_class\"] floating enable, resize set 900 600, move position center" >/dev/null 2>&1 || true
+      i3-msg "[title=\"^$floating_class:\"] floating enable, resize set 900 600, move position center" >/dev/null 2>&1 || true
+      sleep 0.05
+    done
+  fi
+}
+
+open_centered_floating_terminal "$@"

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Prompt for sudo once, then keep the credential fresh.
+set -euo pipefail
+
+sudo -v
+
+while true; do
+  sudo -n true
+  sleep 60
+done 2>/dev/null &
+
+SUDO_KEEPALIVE_PID=$!
+trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT

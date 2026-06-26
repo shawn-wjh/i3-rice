@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Show a styled Walker dmenu and print the selected row.
+set -euo pipefail
+
+prompt=${1:-Menu}
+theme=${WALKER_MENU_THEME:-i3-rofi-settings}
+width=${WALKER_MENU_WIDTH:-300}
+maxheight=${WALKER_MENU_MAXHEIGHT:-240}
+
+if ! command -v walker >/dev/null 2>&1; then
+  rofi -dmenu -i -p "$prompt"
+  exit
+fi
+
+walker --dmenu --placeholder "$prompt" --theme "$theme" --width "$width" --maxheight "$maxheight" --minheight 1
