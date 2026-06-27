@@ -14,8 +14,10 @@ auto-detected, so it aims to work on a fresh machine with minimal editing.
 
 ## Screenshots
 
-<!-- TODO: add screenshots of the four themes here -->
-_Coming soon — themes: Ares · Eclipse · Nova · Titan._
+<img width="5760" height="3234" alt="image" src="https://github.com/user-attachments/assets/fefe1959-3bc7-45cf-99b9-0838094514c6" />
+<img width="5760" height="3234" alt="image" src="https://github.com/user-attachments/assets/9bbc6fd9-67e3-4323-9f50-0fa3a962f40a" />
+<img width="5760" height="3234" alt="image" src="https://github.com/user-attachments/assets/9b4d0f85-6750-483e-bad6-e456f7a2fa84" />
+<img width="5760" height="3234" alt="image" src="https://github.com/user-attachments/assets/6dbc090e-202b-440c-8b53-25982c16b0a4" />
 
 ## Features
 
